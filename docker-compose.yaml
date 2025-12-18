@@ -2,41 +2,48 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_DB: image_processor
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d image_processor"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 20
 
   kafka:
     image: confluentinc/cp-kafka:7.6.1
-    container_name: image-processor-kafka
+    container_name: kafka
     ports:
-      - "9092:9092"
+      - "9092:9092" # доступ с хоста: localhost:9092
     environment:
+      # KRaft cluster id (обязателен и должен быть валидным)
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: "broker,controller"
       KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
 
-      KAFKA_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://kafka:9093"
+      # Сеть Docker: kafka:29092
+      # Хост: localhost:9092
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
       KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT"
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
       KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
 
+      # single-node
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
 
   migrate:
     image: migrate/migrate:v4.17.1
@@ -45,12 +52,7 @@ services:
         condition: service_healthy
     volumes:
       - ./migrations:/migrations
-    command:
-      [
-        "-path", "/migrations",
-        "-database", "postgres://postgres:postgres@postgres:5432/image_processor?sslmode=disable",
-        "up"
-      ]
+    command: ["-path", "/migrations", "-database", "${PG_DSN}", "up"]
     restart: "no"
 
   app:
@@ -66,20 +68,12 @@ services:
         condition: service_started
     env_file:
       - .env
-    environment:
-      PG_DSN: postgres://postgres:postgres@postgres:5432/image_processor?sslmode=disable
-      KAFKA_BROKERS: kafka:29092
-      KAFKA_TOPIC: images
-      KAFKA_GROUP_ID: image-workers
-      HTTP_ADDR: :8080
-      UPLOADS_DIR: /app/uploads
-      FILES_BASE_URL: http://localhost:8080/files
     ports:
       - "8080:8080"
     volumes:
-      - uploads_data:/app/uploads
-
+      - uploads_data:${UPLOADS_DIR}
 
 volumes:
   pg_data:
+  kafka_data:
   uploads_data:
